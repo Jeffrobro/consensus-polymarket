@@ -90,6 +90,10 @@
   .pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;letter-spacing:.03em;border:1px solid var(--line-bright)}
   .pill.yes{color:var(--acc);border-color:var(--acc-deep);background:rgba(70,227,160,.06)}
   .pill.no{color:var(--red);border-color:#3d1715;background:rgba(232,115,106,.06)}
+  .pill.geo{margin-left:6px}
+  .pill.geo.restricted{color:var(--warn);border-color:#4a3a12;background:rgba(224,178,74,.07)}
+  .pill.geo.usok{color:var(--acc);border-color:var(--acc-deep);background:rgba(70,227,160,.05)}
+  .pill.geo.unk{color:var(--ink-faint);border-color:var(--line-bright)}
   .consensus{align-self:center}
   .cbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-bottom:5px}
   .cbar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc-deep),var(--acc))}
@@ -164,6 +168,10 @@
     </div>
     <div class="field">
       <label>&nbsp;</label>
+      <button id="usBtn" title="Hide markets Polymarket geo-restricts in the US (not viewable in the US or the US mobile app).">US-viewable only ○</button>
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
       <button id="proxyBtn" title="Connection route. Defaults to this site's own /api/poly backend.">Proxy ○</button>
     </div>
   </div>
@@ -180,6 +188,7 @@
   <div class="cell"><div class="n" id="sMarkets">—</div><div class="l">Distinct positions</div></div>
   <div class="cell"><div class="n acc" id="sTop">—</div><div class="l">Top overlap</div></div>
   <div class="cell"><div class="n" id="sShared">—</div><div class="l">Held by 3+</div></div>
+  <div class="cell"><div class="n" id="sUS">—</div><div class="l">US-viewable</div></div>
 </div>
 
 <div class="tablewrap" id="tablewrap" style="display:none">
@@ -198,11 +207,15 @@
 <footer>
   <div>Data: Polymarket Data API (<span style="color:var(--ink-dim)">data-api.polymarket.com</span>) — public, on-chain, no login. Positions are read live each scan, routed through this site's own <span style="color:var(--ink-dim)">/api/poly</span> backend.</div>
   <div>Connection: uses this deployment's <span style="color:var(--ink-dim)">/api/poly</span> serverless proxy by default; falls back to public proxies if it's ever unavailable. Click <b>Proxy</b> to point at a different backend.</div>
+  <div>Availability: <span style="color:var(--warn)">🔒 US-restricted</span> = Polymarket geo-blocks this market — it won't open in the US or the US mobile app (a VPN/non-US region is needed). <span style="color:var(--acc)">✓ US-OK</span> = viewable in the US. Toggle <b>US-viewable only</b> to hide the restricted ones. Restriction status is read live from Polymarket's gamma API.</div>
   <div class="note">Read-only. This surfaces overlap; it does not place trades. Leaderboard rank is past P&amp;L — a lot of top volume is market-making, not directional conviction. Treat consensus as a lead to investigate, not a recommendation.</div>
 </footer>
 
 <script>
 const DATA="https://data-api.polymarket.com";
+const GAMMA="https://gamma-api.polymarket.com";
+// markets/events live on the gamma API; everything else on the data API.
+function upstreamFor(path){ return /^\/(markets|events)\b/.test(path) ? GAMMA : DATA; }
 
 // ---- connection routing ---------------------------------------------------
 // By default we route through this same deployment's /api/poly serverless
@@ -233,9 +246,9 @@ function transports(){
       t.push(path=>base+path);
     }
   }
-  t.push(path=>DATA+path);                                            // direct browser fetch
-  t.push(path=>"https://corsproxy.io/?url="+encodeURIComponent(DATA+path));
-  t.push(path=>"https://api.allorigins.win/raw?url="+encodeURIComponent(DATA+path));
+  t.push(path=>upstreamFor(path)+path);                               // direct browser fetch
+  t.push(path=>"https://corsproxy.io/?url="+encodeURIComponent(upstreamFor(path)+path));
+  t.push(path=>"https://api.allorigins.win/raw?url="+encodeURIComponent(upstreamFor(path)+path));
   return t;
 }
 let transportIdx=0;
@@ -320,7 +333,8 @@ async function scan(){
         let e=map.get(key);
         if(!e){
           e={title:p.title, outcome:p.outcome, slug:p.slug, eventSlug:p.eventSlug,
-             curPrice:p.curPrice, endDate:p.endDate, holders:[]};
+             conditionId:p.conditionId, curPrice:p.curPrice, endDate:p.endDate,
+             restricted:undefined, holders:[]};
           map.set(key,e);
         }
         if(typeof p.curPrice==="number") e.curPrice=p.curPrice;
@@ -336,19 +350,62 @@ async function scan(){
     .filter(e=>e.count>=2)                          // overlap only
     .sort((a,b)=> b.count-a.count || (b.curPrice||0)-(a.curPrice||0));
 
+  // Flag which of the markets we're about to show are geo-restricted by
+  // Polymarket (not viewable in the US / US mobile app).
+  const shown=all.slice(0,80);
+  if(shown.length){
+    setStatus("Checking US availability…","live");
+    await enrichRestrictions(shown);
+  }
+
   render(all, traders.length, read, failed, map.size);
   $("run").disabled=false;
   barWrap.classList.remove("show");
 }
 
+// Look up each market's `restricted` flag via the gamma API, keyed by
+// conditionId, in small batches. Sets r.restricted to true/false (or leaves it
+// undefined if the lookup couldn't resolve it). Degrades gracefully on error.
+async function enrichRestrictions(rows){
+  const ids=[...new Set(rows.map(r=>r.conditionId).filter(Boolean))];
+  if(!ids.length) return;
+  const known=new Set(), restricted=new Set();
+  const BATCH=12, batches=[];
+  for(let i=0;i<ids.length;i+=BATCH) batches.push(ids.slice(i,i+BATCH));
+  await Promise.all(batches.map(async b=>{
+    const qs=b.map(id=>"condition_ids="+encodeURIComponent(id)).join("&");
+    try{
+      const mk=await getJSON("/markets?"+qs+"&limit=100");
+      if(Array.isArray(mk)) for(const m of mk){
+        if(!m.conditionId) continue;
+        known.add(m.conditionId);
+        if(m.restricted===true) restricted.add(m.conditionId);
+      }
+    }catch(e){ /* leave unresolved */ }
+  }));
+  for(const r of rows){
+    if(r.conditionId && known.has(r.conditionId)) r.restricted=restricted.has(r.conditionId);
+  }
+}
+
+let lastRender=null;          // cached args so the US-only toggle can re-render
+let hideRestricted=false;
+
 function render(rows,nTraders,read,failed,distinct){
+  lastRender={rows,nTraders,read,failed,distinct};
   const maxCount=rows.length?rows[0].count:1;
   const shared3=rows.filter(r=>r.count>=3).length;
+
+  // Among the rows we actually checked (top 80), how many are US-viewable.
+  const checked=rows.slice(0,80);
+  const usOK=checked.filter(r=>r.restricted===false).length;
+  const usRestricted=checked.filter(r=>r.restricted===true).length;
 
   $("sTraders").textContent=read+(failed?` / ${nTraders}`:"");
   $("sMarkets").textContent=distinct.toLocaleString();
   $("sTop").textContent=rows.length?rows[0].count:"0";
   $("sShared").textContent=shared3;
+  $("sUS").textContent=(usOK||usRestricted)?`${usOK}`:"—";
   $("summary").classList.remove("hide");
 
   if(!rows.length){
@@ -359,9 +416,12 @@ function render(rows,nTraders,read,failed,distinct){
     return;
   }
 
+  let display=rows.slice(0,80);
+  if(hideRestricted) display=display.filter(r=>r.restricted!==true);
+
   const rowsEl=$("rows");
   rowsEl.innerHTML="";
-  rows.slice(0,80).forEach((r,i)=>{
+  display.forEach((r,i)=>{
     const a=document.createElement("a");
     a.className="row";
     a.href = r.eventSlug ? `https://polymarket.com/event/${r.eventSlug}` : "#";
@@ -372,11 +432,16 @@ function render(rows,nTraders,read,failed,distinct){
     const pct=Math.round((r.count/maxCount)*100);
     const price=typeof r.curPrice==="number"?r.curPrice:null;
     const names=r.holders.slice(0,3).join(", ")+(r.holders.length>3?` +${r.holders.length-3}`:"");
+    const geo = r.restricted===true
+      ? `<span class="pill geo restricted" title="Polymarket geo-restricts this market — not viewable in the US or the US mobile app.">🔒 US-restricted</span>`
+      : r.restricted===false
+      ? `<span class="pill geo usok" title="Viewable in the US.">✓ US-OK</span>`
+      : `<span class="pill geo unk" title="Availability unknown.">US ?</span>`;
     a.innerHTML=`
       <div class="rank ${i<3?'top':''}">${String(i+1).padStart(2,"0")}</div>
       <div class="mkt">
         <div class="t">${esc(r.title)}</div>
-        <div class="o"><span class="pill ${pillClass}">${esc(r.outcome||"—")}</span></div>
+        <div class="o"><span class="pill ${pillClass}">${esc(r.outcome||"—")}</span>${geo}</div>
       </div>
       <div class="consensus">
         <div class="cbar"><i style="width:${pct}%"></i></div>
@@ -391,12 +456,26 @@ function render(rows,nTraders,read,failed,distinct){
   $("tablewrap").style.display="block";
   $("empty").style.display="none";
   const note=failed?` (${failed} wallets unreadable)`:"";
-  setStatus(`Done — ${rows.length} overlapping positions across ${read} traders${note}.`,"");
+  const usNote=usRestricted?` — ${usRestricted} US-restricted${hideRestricted?` (hidden)`:``}`:``;
+  setStatus(`Done — ${rows.length} overlapping positions across ${read} traders${usNote}${note}.`,"");
 }
 
 function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
 
 $("run").addEventListener("click",scan);
+
+const usBtn=$("usBtn");
+function refreshUsBtn(){
+  usBtn.textContent="US-viewable only "+(hideRestricted?"●":"○");
+  usBtn.style.color=hideRestricted?"var(--acc)":"";
+  usBtn.style.borderColor=hideRestricted?"var(--acc)":"";
+}
+usBtn.addEventListener("click",()=>{
+  hideRestricted=!hideRestricted;
+  refreshUsBtn();
+  if(lastRender) render(lastRender.rows,lastRender.nTraders,lastRender.read,lastRender.failed,lastRender.distinct);
+});
+refreshUsBtn();
 
 const proxyBtn=$("proxyBtn");
 function refreshProxyBtn(){
