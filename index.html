@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consensus — Polymarket smart-money overlap</title>
+<style>
+  :root{
+    --bg:#0a0e0d;
+    --panel:#101614;
+    --panel-2:#0d1311;
+    --line:#1d2926;
+    --line-bright:#2c3d39;
+    --ink:#e8efe9;
+    --ink-dim:#8aa097;
+    --ink-faint:#5a6e67;
+    --acc:#46e3a0;        /* consensus green */
+    --acc-deep:#0f3d2c;
+    --warn:#e0b24a;
+    --red:#e8736a;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{padding:0 clamp(14px,4vw,48px) 80px}
+  a{color:inherit}
+
+  /* ---- header ---- */
+  header{
+    position:sticky;top:0;z-index:20;
+    margin:0 calc(-1*clamp(14px,4vw,48px));
+    padding:18px clamp(14px,4vw,48px) 16px;
+    background:linear-gradient(180deg,var(--bg) 70%,rgba(10,14,13,0));
+    border-bottom:1px solid var(--line);
+  }
+  .brandrow{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  .mark{font-family:var(--mono);font-weight:600;font-size:19px;letter-spacing:-.02em;color:var(--ink)}
+  .mark b{color:var(--acc)}
+  .tag{font-family:var(--mono);font-size:11px;color:var(--ink-faint);letter-spacing:.04em;text-transform:uppercase}
+  .sub{margin:6px 0 0;color:var(--ink-dim);font-size:13px;max-width:62ch;line-height:1.5}
+
+  /* ---- controls ---- */
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:16px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint)}
+  select,button{
+    font-family:var(--mono);font-size:12.5px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line-bright);border-radius:7px;
+    padding:8px 11px;appearance:none;cursor:pointer;outline:none;transition:border-color .15s,background .15s;
+  }
+  select:hover,button:hover{border-color:var(--acc)}
+  select{padding-right:26px;background-image:linear-gradient(45deg,transparent 50%,var(--ink-dim) 50%),linear-gradient(135deg,var(--ink-dim) 50%,transparent 50%);background-position:calc(100% - 14px) 52%,calc(100% - 9px) 52%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+  button.run{background:var(--acc-deep);border-color:var(--acc);color:var(--acc);font-weight:600;letter-spacing:.02em}
+  button.run:hover{background:var(--acc);color:#04140d}
+  button.run:disabled{opacity:.5;cursor:wait;border-color:var(--line-bright);background:var(--panel);color:var(--ink-dim)}
+
+  /* ---- status strip ---- */
+  .status{margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--ink-dim);display:flex;align-items:center;gap:10px;min-height:18px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-faint);flex:none}
+  .dot.live{background:var(--acc);box-shadow:0 0 0 0 rgba(70,227,160,.5);animation:pulse 1.6s infinite}
+  .dot.err{background:var(--red)}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(70,227,160,.45)}70%{box-shadow:0 0 0 7px rgba(70,227,160,0)}100%{box-shadow:0 0 0 0 rgba(70,227,160,0)}}
+  .bar-wrap{flex:1;max-width:320px;height:4px;background:var(--line);border-radius:3px;overflow:hidden;display:none}
+  .bar-wrap.show{display:block}
+  .bar-fill{height:100%;width:0;background:var(--acc);transition:width .25s}
+
+  /* ---- summary cards ---- */
+  .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:22px}
+  .summary.hide{display:none}
+  .cell{background:var(--panel-2);padding:14px 16px}
+  .cell .n{font-family:var(--mono);font-size:24px;font-weight:600;color:var(--ink);letter-spacing:-.02em}
+  .cell .n.acc{color:var(--acc)}
+  .cell .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);margin-top:3px}
+
+  /* ---- table ---- */
+  .tablewrap{margin-top:22px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .thead{display:grid;grid-template-columns:42px 1fr 116px 150px 96px;gap:0;background:var(--panel);border-bottom:1px solid var(--line-bright);font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-faint)}
+  .thead>div{padding:10px 14px}
+  .thead .r-align{text-align:right}
+  .row{display:grid;grid-template-columns:42px 1fr 116px 150px 96px;gap:0;border-bottom:1px solid var(--line);background:var(--panel-2);transition:background .12s;text-decoration:none;color:inherit}
+  .row:last-child{border-bottom:none}
+  .row:hover{background:var(--panel)}
+  .row>div{padding:13px 14px;min-width:0}
+  .rank{font-family:var(--mono);font-size:13px;color:var(--ink-faint);align-self:center}
+  .rank.top{color:var(--acc)}
+  .mkt{min-width:0}
+  .mkt .t{font-size:13.5px;line-height:1.35;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .mkt .o{display:inline-flex;align-items:center;gap:6px;margin-top:5px;font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+  .pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;letter-spacing:.03em;border:1px solid var(--line-bright)}
+  .pill.yes{color:var(--acc);border-color:var(--acc-deep);background:rgba(70,227,160,.06)}
+  .pill.no{color:var(--red);border-color:#3d1715;background:rgba(232,115,106,.06)}
+  .consensus{align-self:center}
+  .cbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-bottom:5px}
+  .cbar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc-deep),var(--acc))}
+  .cnum{font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+  .cnum b{color:var(--acc);font-weight:600}
+  .holders{align-self:center;font-family:var(--mono);font-size:11px;color:var(--ink-faint);line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .price{align-self:center;text-align:right;font-family:var(--mono)}
+  .price .p{font-size:14px;color:var(--ink)}
+  .price .imp{font-size:10px;color:var(--ink-faint);margin-top:2px}
+
+  .empty{padding:60px 20px;text-align:center;color:var(--ink-dim);font-family:var(--mono);font-size:13px}
+  .empty b{color:var(--ink);display:block;margin-bottom:6px;font-size:14px}
+
+  footer{margin-top:30px;font-family:var(--mono);font-size:11px;color:var(--ink-faint);line-height:1.7;max-width:80ch}
+  footer .note{color:var(--warn)}
+
+  @media(max-width:720px){
+    .thead,.row{grid-template-columns:34px 1fr 92px}
+    .thead .h-holders,.row .holders,.thead .h-price,.row .price{display:none}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brandrow">
+    <span class="mark">consensus<b>.</b></span>
+    <span class="tag">polymarket smart-money overlap</span>
+  </div>
+  <p class="sub">Pulls the top traders off Polymarket's leaderboard, reads every open position, and ranks markets by how many of them are in the same trade. More overlap = stronger signal that the sharps agree.</p>
+
+  <div class="controls">
+    <div class="field">
+      <label>Rank by</label>
+      <select id="orderBy">
+        <option value="PNL">Profit (P&amp;L)</option>
+        <option value="VOL">Volume</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Window</label>
+      <select id="timePeriod">
+        <option value="MONTH" selected>30 days</option>
+        <option value="WEEK">7 days</option>
+        <option value="DAY">24 hours</option>
+        <option value="ALL">All time</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Category</label>
+      <select id="category">
+        <option value="OVERALL" selected>Overall</option>
+        <option value="POLITICS">Politics</option>
+        <option value="SPORTS">Sports</option>
+        <option value="CRYPTO">Crypto</option>
+        <option value="ECONOMICS">Economics</option>
+        <option value="FINANCE">Finance</option>
+        <option value="TECH">Tech</option>
+        <option value="CULTURE">Culture</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Traders</label>
+      <select id="topN">
+        <option value="50" selected>Top 50</option>
+        <option value="30">Top 30</option>
+        <option value="20">Top 20</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
+      <button class="run" id="run">Scan ▸</button>
+    </div>
+    <div class="field">
+      <label>&nbsp;</label>
+      <button id="proxyBtn" title="Connection route. Defaults to this site's own /api/poly backend.">Proxy ○</button>
+    </div>
+  </div>
+
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="statusText">Ready. Hit scan to pull the current leaderboard.</span>
+    <span class="bar-wrap" id="barWrap"><span class="bar-fill" id="barFill"></span></span>
+  </div>
+</header>
+
+<div class="summary hide" id="summary">
+  <div class="cell"><div class="n" id="sTraders">—</div><div class="l">Traders read</div></div>
+  <div class="cell"><div class="n" id="sMarkets">—</div><div class="l">Distinct positions</div></div>
+  <div class="cell"><div class="n acc" id="sTop">—</div><div class="l">Top overlap</div></div>
+  <div class="cell"><div class="n" id="sShared">—</div><div class="l">Held by 3+</div></div>
+</div>
+
+<div class="tablewrap" id="tablewrap" style="display:none">
+  <div class="thead">
+    <div>#</div>
+    <div>Market / position</div>
+    <div>Consensus</div>
+    <div class="h-holders">Top holders</div>
+    <div class="h-price r-align">Price</div>
+  </div>
+  <div id="rows"></div>
+</div>
+
+<div class="empty" id="empty" style="display:none"></div>
+
+<footer>
+  <div>Data: Polymarket Data API (<span style="color:var(--ink-dim)">data-api.polymarket.com</span>) — public, on-chain, no login. Positions are read live each scan, routed through this site's own <span style="color:var(--ink-dim)">/api/poly</span> backend.</div>
+  <div>Connection: uses this deployment's <span style="color:var(--ink-dim)">/api/poly</span> serverless proxy by default; falls back to public proxies if it's ever unavailable. Click <b>Proxy</b> to point at a different backend.</div>
+  <div class="note">Read-only. This surfaces overlap; it does not place trades. Leaderboard rank is past P&amp;L — a lot of top volume is market-making, not directional conviction. Treat consensus as a lead to investigate, not a recommendation.</div>
+</footer>
+
+<script>
+const DATA="https://data-api.polymarket.com";
+
+// ---- connection routing ---------------------------------------------------
+// By default we route through this same deployment's /api/poly serverless
+// function (set up in /api/poly.js). That's the reliable path: same origin,
+// no CORS issues. If the page is opened as a local file, or the backend is
+// unreachable, we fall back to direct fetch + public CORS proxies.
+const SAME_ORIGIN_PROXY =
+  location.protocol.startsWith("http") ? location.origin + "/api/poly" : "";
+
+// A manual override (set via the Proxy button) wins over everything and is
+// remembered in localStorage so it survives reloads.
+let customProxy = "";
+try { customProxy = localStorage.getItem("consensus.proxy") || ""; } catch (e) {}
+
+function transports(){
+  const t=[];
+  const proxies=[];
+  if(customProxy) proxies.push(customProxy);
+  if(SAME_ORIGIN_PROXY && SAME_ORIGIN_PROXY!==customProxy) proxies.push(SAME_ORIGIN_PROXY);
+
+  for(const proxy of proxies){
+    const base=proxy.replace(/\/$/,"");
+    if(/\/api\//.test(base)){
+      // Vercel-style function: real path goes in ?path=...
+      t.push(path=>base+"?path="+encodeURIComponent(path));
+    }else{
+      // Worker-style: path appended directly to the worker origin
+      t.push(path=>base+path);
+    }
+  }
+  t.push(path=>DATA+path);                                            // direct browser fetch
+  t.push(path=>"https://corsproxy.io/?url="+encodeURIComponent(DATA+path));
+  t.push(path=>"https://api.allorigins.win/raw?url="+encodeURIComponent(DATA+path));
+  return t;
+}
+let transportIdx=0;
+
+const $=id=>document.getElementById(id);
+const dot=$("dot"), statusText=$("statusText"), barWrap=$("barWrap"), barFill=$("barFill");
+
+function setStatus(msg,state){
+  statusText.textContent=msg;
+  dot.className="dot"+(state?" "+state:"");
+}
+function progress(frac){
+  barWrap.classList.add("show");
+  barFill.style.width=Math.round(frac*100)+"%";
+}
+
+// fetch JSON, walking through transports until one works; remembers the winner
+async function getJSON(path){
+  const T=transports();
+  let lastErr;
+  for(let i=transportIdx;i<T.length;i++){
+    try{
+      const url=T[i](path);
+      const r=await fetch(url,{headers:{"accept":"application/json"}});
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      const j=await r.json();
+      transportIdx=i;            // lock in the first working transport
+      return j;
+    }catch(e){ lastErr=e; }
+  }
+  throw lastErr||new Error("request failed");
+}
+
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+async function scan(){
+  const orderBy=$("orderBy").value, timePeriod=$("timePeriod").value,
+        category=$("category").value, topN=parseInt($("topN").value,10);
+  $("run").disabled=true;
+  transportIdx=0;
+  $("summary").classList.add("hide");
+  $("tablewrap").style.display="none";
+  $("empty").style.display="none";
+  progress(0.02);
+  setStatus("Pulling leaderboard…","live");
+
+  let board;
+  try{
+    board=await getJSON(`/v1/leaderboard?category=${category}&timePeriod=${timePeriod}&orderBy=${orderBy}&limit=${topN}`);
+  }catch(e){
+    setStatus("Couldn't reach the API through any route. Check the deployment's /api/poly or set a proxy (button above).","err");
+    $("run").disabled=false; barWrap.classList.remove("show"); return;
+  }
+  if(!Array.isArray(board)||!board.length){
+    setStatus("Leaderboard came back empty for that filter.","err");
+    $("run").disabled=false; barWrap.classList.remove("show"); return;
+  }
+
+  const traders=board.map(t=>({
+    addr:t.proxyWallet,
+    name:t.userName||(t.proxyWallet?t.proxyWallet.slice(0,6)+"…"+t.proxyWallet.slice(-4):"anon"),
+  })).filter(t=>t.addr);
+
+  // group positions by asset (a specific outcome token = one tradeable position)
+  const map=new Map();
+  let read=0, failed=0;
+
+  for(let i=0;i<traders.length;i++){
+    const tr=traders[i];
+    setStatus(`Reading positions — ${i+1}/${traders.length} (${tr.name})`,"live");
+    progress(0.05+0.9*(i/traders.length));
+    let pos;
+    try{
+      pos=await getJSON(`/positions?user=${tr.addr}&sizeThreshold=1&limit=500&sortBy=CURRENT&sortDirection=DESC`);
+      read++;
+    }catch(e){ failed++; await sleep(120); continue; }
+    if(Array.isArray(pos)){
+      for(const p of pos){
+        if(!p.asset||!p.title) continue;
+        if(p.redeemable) continue;                 // skip already-resolved
+        const key=p.asset;
+        let e=map.get(key);
+        if(!e){
+          e={title:p.title, outcome:p.outcome, slug:p.slug, eventSlug:p.eventSlug,
+             curPrice:p.curPrice, endDate:p.endDate, holders:[]};
+          map.set(key,e);
+        }
+        if(typeof p.curPrice==="number") e.curPrice=p.curPrice;
+        e.holders.push(tr.name);
+      }
+    }
+    await sleep(90);   // be polite to the API
+  }
+
+  progress(1);
+  const all=[...map.values()]
+    .map(e=>({...e,count:e.holders.length}))
+    .filter(e=>e.count>=2)                          // overlap only
+    .sort((a,b)=> b.count-a.count || (b.curPrice||0)-(a.curPrice||0));
+
+  render(all, traders.length, read, failed, map.size);
+  $("run").disabled=false;
+  barWrap.classList.remove("show");
+}
+
+function render(rows,nTraders,read,failed,distinct){
+  const maxCount=rows.length?rows[0].count:1;
+  const shared3=rows.filter(r=>r.count>=3).length;
+
+  $("sTraders").textContent=read+(failed?` / ${nTraders}`:"");
+  $("sMarkets").textContent=distinct.toLocaleString();
+  $("sTop").textContent=rows.length?rows[0].count:"0";
+  $("sShared").textContent=shared3;
+  $("summary").classList.remove("hide");
+
+  if(!rows.length){
+    $("tablewrap").style.display="none";
+    const em=$("empty"); em.style.display="block";
+    em.innerHTML="<b>No overlap found</b>None of the top traders share an open position in this slice. Try a wider window or a specific category.";
+    setStatus(`Done — read ${read} traders, no shared positions.`,"");
+    return;
+  }
+
+  const rowsEl=$("rows");
+  rowsEl.innerHTML="";
+  rows.slice(0,80).forEach((r,i)=>{
+    const a=document.createElement("a");
+    a.className="row";
+    a.href = r.eventSlug ? `https://polymarket.com/event/${r.eventSlug}` : "#";
+    a.target="_blank"; a.rel="noopener";
+    const isYes=(r.outcome||"").toLowerCase()==="yes";
+    const isNo=(r.outcome||"").toLowerCase()==="no";
+    const pillClass=isYes?"yes":isNo?"no":"";
+    const pct=Math.round((r.count/maxCount)*100);
+    const price=typeof r.curPrice==="number"?r.curPrice:null;
+    const names=r.holders.slice(0,3).join(", ")+(r.holders.length>3?` +${r.holders.length-3}`:"");
+    a.innerHTML=`
+      <div class="rank ${i<3?'top':''}">${String(i+1).padStart(2,"0")}</div>
+      <div class="mkt">
+        <div class="t">${esc(r.title)}</div>
+        <div class="o"><span class="pill ${pillClass}">${esc(r.outcome||"—")}</span></div>
+      </div>
+      <div class="consensus">
+        <div class="cbar"><i style="width:${pct}%"></i></div>
+        <div class="cnum"><b>${r.count}</b> / ${read} traders</div>
+      </div>
+      <div class="holders" title="${esc(r.holders.join(', '))}">${esc(names)}</div>
+      <div class="price">
+        ${price!=null?`<div class="p">${(price*100).toFixed(0)}¢</div><div class="imp">${(price*100).toFixed(0)}% implied</div>`:`<div class="p">—</div>`}
+      </div>`;
+    rowsEl.appendChild(a);
+  });
+  $("tablewrap").style.display="block";
+  $("empty").style.display="none";
+  const note=failed?` (${failed} wallets unreadable)`:"";
+  setStatus(`Done — ${rows.length} overlapping positions across ${read} traders${note}.`,"");
+}
+
+function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+
+$("run").addEventListener("click",scan);
+
+const proxyBtn=$("proxyBtn");
+function refreshProxyBtn(){
+  const active=customProxy||SAME_ORIGIN_PROXY;
+  if(active){ proxyBtn.textContent="Proxy ●"; proxyBtn.style.color="var(--acc)"; proxyBtn.style.borderColor="var(--acc)"; }
+  else { proxyBtn.textContent="Proxy ○"; proxyBtn.style.color=""; proxyBtn.style.borderColor=""; }
+}
+proxyBtn.addEventListener("click",()=>{
+  const v=prompt(
+    "Connection route.\n\n"+
+    "By default this site uses its own backend:\n"+(SAME_ORIGIN_PROXY||"(none — opened as local file)")+"\n\n"+
+    "Override with another proxy if you want:\n"+
+    "Vercel:     https://your-domain.com/api/poly\n"+
+    "Cloudflare: https://name.you.workers.dev\n\n"+
+    "Leave blank to clear the override and use the default.",
+    customProxy
+  );
+  if(v===null) return;              // cancelled
+  customProxy=v.trim();
+  try{
+    if(customProxy) localStorage.setItem("consensus.proxy",customProxy);
+    else localStorage.removeItem("consensus.proxy");
+  }catch(e){}
+  transportIdx=0;                   // re-evaluate transports
+  refreshProxyBtn();
+  setStatus(customProxy?"Proxy override set. Hit scan.":"Using default backend. Hit scan.","");
+});
+refreshProxyBtn();
+
+window.addEventListener("DOMContentLoaded",()=>{ setTimeout(scan,300); });
+</script>
+</body>
+</html>
