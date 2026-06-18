@@ -1,18 +1,31 @@
-// Vercel serverless proxy for Polymarket's public Data API.
+// Vercel serverless proxy for Polymarket's public APIs.
 //
-// The browser can't call data-api.polymarket.com directly (no CORS headers),
-// so the dashboard calls this function on its own origin instead:
+// The browser can't call Polymarket's APIs directly (no CORS headers), so the
+// dashboard calls this function on its own origin instead:
 //
 //     /api/poly?path=/v1/leaderboard?category=OVERALL&timePeriod=MONTH...
 //     /api/poly?path=/positions?user=0x...&limit=500...
+//     /api/poly?path=/markets?condition_ids=0x...   (geo-restriction lookup)
 //
-// We only forward a small allow-list of paths so this can't be abused as an
+// The upstream host is picked from the path prefix:
+//     /v1/leaderboard, /positions  -> data-api.polymarket.com
+//     /markets, /events            -> gamma-api.polymarket.com
+//
+// We only forward this small allow-list of paths so this can't be abused as an
 // open proxy. Everything is read-only GET.
 
-const UPSTREAM = "https://data-api.polymarket.com";
+const UPSTREAMS = {
+  data: "https://data-api.polymarket.com",
+  gamma: "https://gamma-api.polymarket.com",
+};
 
-// Only these path prefixes are allowed through.
-const ALLOWED_PREFIXES = ["/v1/leaderboard", "/positions"];
+// path prefix -> which upstream host handles it
+const ROUTES = [
+  { prefix: "/v1/leaderboard", host: "data" },
+  { prefix: "/positions", host: "data" },
+  { prefix: "/markets", host: "gamma" },
+  { prefix: "/events", host: "gamma" },
+];
 
 export default async function handler(req, res) {
   // --- CORS (so the page works even if served from another origin) ---
@@ -39,15 +52,16 @@ export default async function handler(req, res) {
   }
   if (!path.startsWith("/")) path = "/" + path;
 
-  // Allow-list check (ignore the query-string portion when matching).
+  // Allow-list check (ignore the query-string portion when matching) and pick
+  // the upstream host for this path.
   const pathname = path.split("?")[0];
-  const ok = ALLOWED_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
-  if (!ok) {
+  const route = ROUTES.find((r) => pathname === r.prefix || pathname.startsWith(r.prefix));
+  if (!route) {
     res.status(403).json({ error: "path not allowed", path: pathname });
     return;
   }
 
-  const target = UPSTREAM + path;
+  const target = UPSTREAMS[route.host] + path;
 
   try {
     const upstream = await fetch(target, {
@@ -56,8 +70,8 @@ export default async function handler(req, res) {
 
     const body = await upstream.text();
 
-    // Cache successful reads briefly at the edge to spare the upstream API
-    // during a 50-trader scan and to make repeat scans snappy.
+    // Cache successful reads briefly at the edge to spare the upstream APIs
+    // during a scan and to make repeat scans snappy.
     if (upstream.ok) {
       res.setHeader("Cache-Control", "public, s-maxage=30, stale-while-revalidate=120");
     }
