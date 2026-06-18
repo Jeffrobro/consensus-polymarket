@@ -419,6 +419,15 @@ function render(rows,nTraders,read,failed,distinct){
   let display=rows.slice(0,80);
   if(hideRestricted) display=display.filter(r=>r.restricted!==true);
 
+  // Filter hid everything (e.g. every top market is US-restricted).
+  if(!display.length && rows.length){
+    $("tablewrap").style.display="none";
+    const em=$("empty"); em.style.display="block";
+    em.innerHTML="<b>Nothing US-viewable in this slice</b>Every overlapping market here is geo-restricted by Polymarket. Turn off <b>US-viewable only</b> to see them, or try another category.";
+    setStatus(`Done — ${rows.length} overlapping positions, all US-restricted (hidden).`,"");
+    return;
+  }
+
   const rowsEl=$("rows");
   rowsEl.innerHTML="";
   display.forEach((r,i)=>{
